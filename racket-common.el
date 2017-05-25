@@ -226,6 +226,14 @@ a list of all modes in which Racket is edited."
   (setq-local parse-sexp-ignore-comments t)
   (setq-local comment-column 40)
   ;; -----------------------------------------------------------------
+  ;; Indent
+  (setq-local indent-line-function #'racket-indent-line)
+  (racket--set-indentation)
+  (setq-local indent-tabs-mode nil)
+  ;; The following is now N/A because we no longer use
+  ;; `calculate-lisp-indent', which calls it:
+  ;; (setq-local lisp-indent-function #'racket-indent-function)
+  ;; -----------------------------------------------------------------
   ;;; Misc
   (setq-local local-abbrev-table racket-mode-abbrev-table)
   (setq-local paragraph-start (concat "$\\|" page-delimiter))
@@ -233,12 +241,8 @@ a list of all modes in which Racket is edited."
   (setq-local paragraph-ignore-fill-prefix t)
   (setq-local fill-paragraph-function #'lisp-fill-paragraph)
   (setq-local adaptive-fill-mode nil)
-  (setq-local indent-line-function #'racket-indent-line)
   (setq-local parse-sexp-ignore-comments t)
   (setq-local outline-regexp ";;; \\|(....")
-  (setq-local lisp-indent-function #'racket-indent-function)
-  (racket--set-indentation)
-  (setq-local indent-tabs-mode nil)
   (setq-local completion-at-point-functions (list #'racket-complete-at-point))
   (setq-local eldoc-documentation-function nil)
   (setq-local beginning-of-defun-function #'racket--beginning-of-defun-function))
