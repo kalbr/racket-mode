@@ -89,8 +89,7 @@ variables. Otherwise prefer `racket-indent-function`."
         (beg (progn (beginning-of-line) (point))))
     (skip-chars-forward " \t")
     (if (or (null indent) (looking-at "\\s<\\s<\\s<"))
-        ;; Don't alter indentation of a ;;; comment line
-        ;; or a line that starts in a string.
+        ;; Don't alter indentation of a ;;; comment line.
         ;; FIXME: inconsistency: comment-indent moves ;;; to column 0.
         (goto-char (- (point-max) pos))
       (when (listp indent)
@@ -103,7 +102,60 @@ variables. Otherwise prefer `racket-indent-function`."
       (when (> (- (point-max) pos) (point))
         (goto-char (- (point-max) pos))))))
 
-(defvar racket--calculate-indent-last-sexp nil)
+(defsubst ppss-paren-depth (xs)
+  "The depth in parentheses, counting from 0.
+*Warning:* this can be negative if there are more close parens
+than open parens between the parser’s starting point and end
+point."
+  (elt xs 0))
+
+(defsubst ppss-containing-sexp (xs)
+  "The character position of the start of the innermost parenthetical
+grouping containing the stopping point; ‘nil’ if none."
+  (elt xs 1))
+
+(defsubst ppss-last-sexp (xs)
+  "The character position of the start of the last complete
+subexpression terminated; ‘nil’ if none.
+Valid only for `parse-partial-sexp' -- NOT `syntax-ppss'."
+  (elt xs 2))
+
+(defsubst ppss-string-p (xs)
+  "Non-‘nil’ if inside a string.
+More precisely, this is the character that will terminate the
+string, or ‘t’ if a generic string delimiter character should
+terminate it."
+  (elt xs 3))
+
+(defsubst ppss-comment-p (xs)
+  "‘t’ if inside a non-nestable comment (of any comment style;
+*note Syntax Flags::); or the comment nesting level if inside a
+comment that can be nested."
+  (elt xs 4))
+
+(defsubst ppss-quote-p (xs)
+  "‘t’ if the end point is just after a quote character."
+  (elt xs 5))
+
+(defsubst ppss-min-paren-depth (xs)
+  "The minimum parenthesis depth encountered during this scan.
+Valid only for `parse-partial-sexp' -- NOT `syntax-ppss'."
+  (elt xs 6))
+
+(defsubst ppss-comment-type (xs)
+  "What kind of comment is active: ‘nil’ if not in a comment or
+in a comment of style ‘a’; 1 for a comment of style ‘b’; 2 for a
+comment of style ‘c’; and ‘syntax-table’ for a comment that
+should be ended by a generic comment delimiter character."
+  (elt xs 7))
+
+(defsubst ppss-string/comment-start (xs)
+  "The string or comment start position.
+While inside a comment, this is the position where the comment
+began; while inside a string, this is the position where the
+string began. When outside of strings and comments, this element
+is ‘nil’."
+  (elt xs 8))
 
 (defun racket--calculate-indent ()
   "Simplified version of `calculate-lisp-indent'.
@@ -127,7 +179,7 @@ is the buffer position of the start of the containing expression."
           ;; set to number to inhibit calling `racket-indent-function':
           (desired-indent nil)
           (retry t)
-          (racket--calculate-indent-last-sexp nil)
+          (last-sexp nil)
           (containing-sexp nil))
       (let ((beginning-of-defun-function nil)) ;plain b-o-d
         (beginning-of-defun))
@@ -137,118 +189,66 @@ is the buffer position of the start of the containing expression."
       ;; Find innermost containing sexp
       (while (and retry
                   state
-                  (> (elt state 0) 0))
+                  (< 0 (ppss-paren-depth state)))
         (setq retry nil)
-        (setq racket--calculate-indent-last-sexp (elt state 2))
-        (setq containing-sexp (elt state 1))
+        (setq last-sexp (ppss-last-sexp state))
+        (setq containing-sexp (ppss-containing-sexp state))
         ;; Position following last unclosed open.
         (goto-char (1+ containing-sexp))
         ;; Is there a complete sexp since then?
-        (if (and racket--calculate-indent-last-sexp
-                 (> racket--calculate-indent-last-sexp (point)))
-            ;; Yes, but is there a containing sexp after that?
-            (let ((peek (parse-partial-sexp racket--calculate-indent-last-sexp
-                                            indent-point 0)))
-              (if (setq retry (car (cdr peek))) (setq state peek)))))
-      (if retry
-          nil
+        (when (and last-sexp
+                   (< (point) last-sexp))
+          ;; Yes, but is there a containing sexp after that?
+          (let ((peek (parse-partial-sexp last-sexp indent-point 0)))
+            (when (setq retry (ppss-containing-sexp peek))
+              (setq state peek)))))
+
+      (unless retry
         ;; Innermost containing sexp found
         (goto-char (1+ containing-sexp))
-        (if (not racket--calculate-indent-last-sexp)
+        (if (not last-sexp)
             ;; indent-point immediately follows open paren.
-            ;; Don't call hook.
+            ;; Don't call racket-indent-function.
             (setq desired-indent (current-column))
           ;; Find the start of first element of containing sexp.
-          (parse-partial-sexp (point) racket--calculate-indent-last-sexp 0 t)
-          (cond ;; ((looking-at "\\s(")
-           ;;  ;; First element of containing sexp is a list.
-           ;;  ;; Indent under that list.
-           ;;  )
-           ((> (save-excursion (forward-line 1) (point))
-               racket--calculate-indent-last-sexp)
-            ;; This is the first line to start within the containing sexp.
-            ;; It's almost certainly a function call.
-            (if (= (point) racket--calculate-indent-last-sexp)
-                ;; Containing sexp has nothing before this line
-                ;; except the first element.  Indent under that element.
-                nil
-              ;; Skip the first element, find start of second (the first
-              ;; argument of the function call) and indent under.
-              (progn (forward-sexp 1)
-                     (parse-partial-sexp (point)
-                                         racket--calculate-indent-last-sexp
-                                         0 t)))
-            (backward-prefix-chars))
-           (t
-            ;; Indent beneath first sexp on same line as
-            ;; `racket--calculate-indent-last-sexp'.  Again, it's
-            ;; almost certainly a function call.
-            (goto-char racket--calculate-indent-last-sexp)
-            (beginning-of-line)
-            (parse-partial-sexp (point) racket--calculate-indent-last-sexp
-                                0 t)
-            (backward-prefix-chars)))))
-      ;; Point is at the point to indent under unless we are inside a
+          (parse-partial-sexp (point) last-sexp 0 t)
+          ;; Note: The original lisp-mode code had a condition below
+          ;; for (looking-at "\\s(") -- but that's wrong for Racket,
+          ;; e.g. see issue #243.
+          (cond ((< last-sexp
+                    (save-excursion (forward-line 1) (point)))
+                 ;; This is the first line to start within the containing sexp.
+                 ;; It's almost certainly a function call.
+                 (if (= (point) last-sexp)
+                     ;; Containing sexp has nothing before this line
+                     ;; except the first element.  Indent under that element.
+                     nil
+                   ;; Skip the first element, find start of second (the first
+                   ;; argument of the function call) and indent under.
+                   (progn (forward-sexp 1)
+                          (parse-partial-sexp (point) last-sexp 0 t)))
+                 (backward-prefix-chars))
+                (t
+                 ;; Indent beneath first sexp on same line as
+                 ;; `last-sexp'.  Again, it's
+                 ;; almost certainly a function call.
+                 (goto-char last-sexp)
+                 (beginning-of-line)
+                 (parse-partial-sexp (point) last-sexp 0 t)
+                 (backward-prefix-chars)))))
+
+      ;; Point is where to indent under, unless we are inside a
       ;; string. Call `racket-indent-function' unless desired
       ;; indentation has already been computed.
-      (let ((normal-indent (current-column)))
-        (cond ((elt state 3)
-               ;; Inside a string, don't change indentation.
-               nil)
-              ;; in this case racket--calculate-indent-last-sexp is not nil
-              (racket--calculate-indent-last-sexp
-               (or
-                ;; try to align the parameters of a known function
-                (and (not retry)
-                     (racket-indent-function indent-point state))
-                ;; If the function has no special alignment
-                ;; or it does not apply to this argument,
-                ;; try to align a constant-symbol under the last
-                ;; preceding constant symbol, if there is such one of
-                ;; the last 2 preceding symbols, in the previous
-                ;; uncommented line.
-                (and (save-excursion
-                       (goto-char indent-point)
-                       (skip-chars-forward " \t")
-                       (looking-at ":"))
-                     ;; The last sexp may not be at the indentation
-                     ;; where it begins, so find that one, instead.
-                     (save-excursion
-                       (goto-char racket--calculate-indent-last-sexp)
-                       ;; Handle prefix characters and whitespace
-                       ;; following an open paren.  (Bug#1012)
-                       (backward-prefix-chars)
-                       (while (not (or (looking-back "^[ \t]*\\|([ \t]+"
-                                                     (line-beginning-position))
-                                       (and containing-sexp
-                                            (>= (1+ containing-sexp) (point)))))
-                         (forward-sexp -1)
-                         (backward-prefix-chars))
-                       (setq racket--calculate-indent-last-sexp (point)))
-                     (> racket--calculate-indent-last-sexp
-                        (save-excursion
-                          (goto-char (1+ containing-sexp))
-                          (parse-partial-sexp (point) racket--calculate-indent-last-sexp 0 t)
-                          (point)))
-                     (let ((parse-sexp-ignore-comments t)
-                           indent)
-                       (goto-char racket--calculate-indent-last-sexp)
-                       (or (and (looking-at ":")
-                                (setq indent (current-column)))
-                           (and (< (line-beginning-position)
-                                   (prog2 (backward-sexp) (point)))
-                                (looking-at ":")
-                                (setq indent (current-column))))
-                       indent))
-                ;; another symbols or constants not preceded by a constant
-                ;; as defined above.
-                normal-indent))
-              ;; in this case racket--calculate-indent-last-sexp is nil
-              (desired-indent)
-              (t
-               normal-indent))))))
+      (cond ((ppss-string-p state)
+             nil)
+            ((and (not retry) last-sexp)
+             (racket-indent-function indent-point state))
+            (desired-indent
+             desired-indent)
+            (t
+             (current-column))))))
 
-;; Copied from lisp-mode but heavily modified
 (defun racket-indent-function (indent-point state)
   "The function `racket--calculate-indent' calls this.
 
@@ -279,8 +279,8 @@ value can be:
 
 This function always returns either the indentation to use (never returns nil)."
   (let ((normal-indent (current-column))
-        (open-pos      (elt state 1))   ;start of innermost containing list
-        (last-sexp-pos (elt state 2)))  ;start of last complete sexp terminated
+        (open-pos      (ppss-containing-sexp state))
+        (last-sexp-pos (ppss-last-sexp state)))
     (goto-char (1+ open-pos))
     (let ((open-column (1- (current-column))))
       ;;(parse-partial-sexp (point) racket--calculate-indent-last-sexp 0 t) ;; ??????
