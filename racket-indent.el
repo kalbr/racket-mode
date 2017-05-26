@@ -120,12 +120,11 @@ Then COLUMN is the column to indent to, and CONTAINING-SEXP-START
 is the buffer position of the start of the containing expression."
   (save-excursion
     (beginning-of-line)
-    (let ((indent-point (point))
-          (state nil)
-          ;; set to number to inhibit calling `racket-indent-function':
-          (desired-indent nil)
-          (retry t)
-          (last-sexp nil)
+    (let ((indent-point    (point))
+          (state           nil)
+          (desired-indent  nil)
+          (found-inner     nil)
+          (last-sexp       nil)
           (containing-sexp nil))
       (let ((beginning-of-defun-function nil)) ;plain b-o-d
         (beginning-of-defun))
@@ -133,23 +132,23 @@ is the buffer position of the start of the containing expression."
       (while (< (point) indent-point)
         (setq state (parse-partial-sexp (point) indent-point 0)))
       ;; Find innermost containing sexp
-      (while (and retry
+      (while (and (not found-inner)
                   state
                   (< 0 (racket--ppss-paren-depth state)))
-        (setq retry nil)
+        (setq found-inner t)
         (setq last-sexp (racket--ppss-last-sexp state))
         (setq containing-sexp (racket--ppss-containing-sexp state))
         ;; Position following last unclosed open.
         (goto-char (1+ containing-sexp))
         ;; Is there a complete sexp since then?
-        (when (and last-sexp
-                   (< (point) last-sexp))
+        (when (and last-sexp (< (point) last-sexp))
           ;; Yes, but is there a containing sexp after that?
           (let ((peek (parse-partial-sexp last-sexp indent-point 0)))
-            (when (setq retry (racket--ppss-containing-sexp peek))
+            (when (racket--ppss-containing-sexp peek)
+              (setq found-inner nil)
               (setq state peek)))))
 
-      (unless retry
+      (when found-inner
         ;; Innermost containing sexp found
         (goto-char (1+ containing-sexp))
         (if (not last-sexp)
@@ -188,7 +187,7 @@ is the buffer position of the start of the containing expression."
       ;; indentation has already been computed.
       (cond ((racket--ppss-string-p state)
              nil)
-            ((and (not retry) last-sexp)
+            ((and found-inner last-sexp)
              (racket-indent-function indent-point state))
             (desired-indent
              desired-indent)
