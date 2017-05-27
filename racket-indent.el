@@ -35,7 +35,8 @@
 ;; However `calculate-lisp-indent' is complicated and doesn't always
 ;; behave the way we want. So we use a simplified version of that
 ;; (`racket--calculate-indent') in our `indent-line-function',
-;; `racket-indent-line'.
+;; `racket-indent-line'. That just directly calls
+;; `racket-indent-function'.
 
 (defun racket-indent-line (&optional whole-exp)
   "Indent current line as Racket code.
@@ -86,26 +87,31 @@ help people who may have extensive `scheme-indent-function`
 settings, particularly in the form of file or dir local
 variables. Otherwise prefer `racket-indent-function`."
   (interactive)
-  (let ((indent (racket--calculate-indent))
-        (pos (- (point-max) (point)))
+  (pcase (racket--calculate-indent)
+    (`nil       nil)
+    (`(,n . ,_) (racket--do-indent-line n))
+    (n          (racket--do-indent-line n))))
+
+(defun racket--do-indent-line (amount)
+  "Change indentation of current line.
+When point is within the leading whitespace, move it past the new
+indentation whitespace. Otherwise preserve its position relative
+to the original text."
+  (let ((pos (- (point-max) (point)))
         (beg (progn (beginning-of-line) (point))))
     (skip-chars-forward " \t")
-    (if (or (null indent) (looking-at "\\s<\\s<\\s<"))
-        ;; Don't alter indentation of a ;;; comment line.
-        ;; FIXME: inconsistency: comment-indent moves ;;; to column 0.
-        (goto-char (- (point-max) pos))
-      (when (listp indent)
-        (setq indent (car indent)))
-      (unless (zerop (- indent (current-column)))
-        (delete-region beg (point))
-        (indent-to indent))
-      ;; If initial point was within line's indentation,
-      ;; position after the indentation.  Else stay at same point in text.
-      (when (< (point) (- (point-max) pos))
-        (goto-char (- (point-max) pos))))))
+    (unless (= amount (current-column))
+      (delete-region beg (point))
+      (indent-to amount))
+    (when (< (point) (- (point-max) pos))
+      (goto-char (- (point-max) pos)))))
 
 (defun racket--calculate-indent ()
-  "Simplified/modified version of `calculate-lisp-indent'.
+  "Somewhat simplified version of `calculate-lisp-indent'.
+
+This is still more verbose and imperative than I'd like. But I'm
+not confident enough I understand all the edge cases it might be
+trying to handle, yet, to make it simpler, yet.
 
 Original doc string:
 
@@ -254,12 +260,13 @@ Returns nil for #% identifiers like #%app."
                           (not (any ?\%))))))
 
 (defun racket--data-sequence-p ()
-  "Looking at certain sequences where we align all with head item?
+  "Looking at \"data\" sequences where we align all with head?
 
-These include '() `() #() -- and {} if `racket-indent-curly-as-sequence'
-is t -- but not #'() #`() ,() ,@().
+These sequences include '() `() #() -- and {} when
+`racket-indent-curly-as-sequence' is t -- but never #'() #`() ,()
+,@().
 
-To handle nested items, search `backward-up-list' up to
+To handle nested items, we search `backward-up-list' up to
 `racket-indent-sequence-depth' times."
   (and (< 0 racket-indent-sequence-depth)
        (save-excursion

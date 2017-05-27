@@ -230,9 +230,6 @@ a list of all modes in which Racket is edited."
   (setq-local indent-line-function #'racket-indent-line)
   (racket--set-indentation)
   (setq-local indent-tabs-mode nil)
-  ;; The following is now N/A because we no longer use
-  ;; `calculate-lisp-indent', which calls it:
-  ;; (setq-local lisp-indent-function #'racket-indent-function)
   ;; -----------------------------------------------------------------
   ;;; Misc
   (setq-local local-abbrev-table racket-mode-abbrev-table)
