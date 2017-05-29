@@ -146,36 +146,10 @@ to make it simpler."
       (when found-inner
         ;; Innermost containing sexp found
         (goto-char (1+ containing-sexp))
-        (if (not last-sexp)
-            ;; indent-point immediately follows open paren.
-            ;; Don't call racket-indent-function.
-            (setq desired-indent (current-column))
-          ;; Find the start of first element of containing sexp.
-          (parse-partial-sexp (point) last-sexp 0 t)
-          ;; Note: The original lisp-mode code had a condition below
-          ;; for (looking-at "\\s(") -- but that's wrong for Racket,
-          ;; e.g. see issue #243.
-          (cond ((< last-sexp
-                    (save-excursion (forward-line 1) (point)))
-                 ;; This is the first line to start within the containing sexp.
-                 ;; It's almost certainly a function call.
-                 (if (= (point) last-sexp)
-                     ;; Containing sexp has nothing before this line
-                     ;; except the first element.  Indent under that element.
-                     nil
-                   ;; Skip the first element, find start of second (the first
-                   ;; argument of the function call) and indent under.
-                   (progn (forward-sexp 1)
-                          (parse-partial-sexp (point) last-sexp 0 t)))
-                 (backward-prefix-chars))
-                (t
-                 ;; Indent beneath first sexp on same line as
-                 ;; `last-sexp'.  Again, it's
-                 ;; almost certainly a function call.
-                 (goto-char last-sexp)
-                 (beginning-of-line)
-                 (parse-partial-sexp (point) last-sexp 0 t)
-                 (backward-prefix-chars)))))
+        (unless last-sexp
+          ;; indent-point immediately follows open paren.
+          ;; Don't call racket-indent-function.
+          (setq desired-indent (current-column))))
 
       ;; Point is where to indent under, unless we are inside a
       ;; string. Call `racket-indent-function' unless desired
@@ -199,7 +173,6 @@ There is special handling for:
   - {} forms when `racket-indent-curly-as-sequence' is not nil
 
 INDENT-POINT is the position at which the line being indented begins.
-Point is located at the point to indent under (for default indentation);
 STATE is the `parse-partial-sexp' state for that position.
 
 If the current line is in a call to a Lisp form that has a non-nil
