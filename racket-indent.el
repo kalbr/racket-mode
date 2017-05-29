@@ -143,25 +143,11 @@ to make it simpler."
               (setq found-inner nil)
               (setq state peek)))))
 
-      (when found-inner
-        ;; Innermost containing sexp found
-        (goto-char (1+ containing-sexp))
-        (unless last-sexp
-          ;; indent-point immediately follows open paren.
-          ;; Don't call racket-indent-function.
-          (setq desired-indent (current-column))))
-
-      ;; Point is where to indent under, unless we are inside a
-      ;; string. Call `racket-indent-function' unless desired
-      ;; indentation has already been computed.
-      (cond ((racket--ppss-string-p state)
-             nil)
-            ((and found-inner last-sexp)
-             (racket-indent-function indent-point state))
-            (desired-indent
-             desired-indent)
-            (t
-             (current-column))))))
+      (cond ((racket--ppss-string-p state) nil)
+            ((not found-inner)             (current-column))
+            (last-sexp                     (racket-indent-function indent-point state))
+            (t                             (goto-char (1+ containing-sexp))
+                                           (current-column))))))
 
 (defun racket-indent-function (indent-point state)
   "The function `racket--calculate-indent' calls this.
