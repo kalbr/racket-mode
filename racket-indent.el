@@ -248,15 +248,16 @@ To handle nested items, we search `backward-up-list' up to
 (defun racket--normal-indent (indent-point state)
   ;; Credit: Substantially borrowed from clojure-mode
   (goto-char (racket--ppss-last-sexp state))
-  (let ((last-sexp-start nil))
+  (backward-prefix-chars)
+  (let ((last-sexp nil))
     (if (ignore-errors
           ;; `backward-sexp' until we reach the start of a sexp that is the
           ;; first of its line (the start of the enclosing sexp).
           (while (string-match (rx (not blank))
                                (buffer-substring (line-beginning-position)
                                                  (point)))
-            (setq last-sexp-start (prog1 (point)
-                                    (forward-sexp -1))))
+            (setq last-sexp (prog1 (point)
+                              (forward-sexp -1))))
           t)
         ;; Here we've found an arg before the arg we're indenting
         ;; which is at the start of a line.
