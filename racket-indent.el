@@ -88,43 +88,31 @@ settings, particularly in the form of file or dir local
 variables. Otherwise prefer `racket-indent-function`."
   (interactive)
   (pcase (racket--calculate-indent)
-    (`nil       nil)
-    (`(,n . ,_) (racket--do-indent-line n))
-    (n          (racket--do-indent-line n))))
-
-(defun racket--do-indent-line (amount)
-  "Change indentation of current line.
-When point is within the leading whitespace, move it past the new
-indentation whitespace. Otherwise preserve its position relative
-to the original text."
-  (let ((pos (- (point-max) (point)))
-        (beg (progn (beginning-of-line) (point))))
-    (skip-chars-forward " \t")
-    (unless (= amount (current-column))
-      (delete-region beg (point))
-      (indent-to amount))
-    (when (< (point) (- (point-max) pos))
-      (goto-char (- (point-max) pos)))))
+    (`nil  nil)
+    ;; When point is within the leading whitespace, move it past the
+    ;; new indentation whitespace. Otherwise preserve its position
+    ;; relative to the original text.
+    (amount (let ((pos (- (point-max) (point)))
+                  (beg (progn (beginning-of-line) (point))))
+              (skip-chars-forward " \t")
+              (unless (= amount (current-column))
+                (delete-region beg (point))
+                (indent-to amount))
+              (when (< (point) (- (point-max) pos))
+                (goto-char (- (point-max) pos)))))))
 
 (defun racket--calculate-indent ()
-  "Somewhat simplified version of `calculate-lisp-indent'.
+  "Return appropriate indentation for current line as Lisp code.
 
-This is still more verbose and imperative than I'd like. But I'm
-not confident enough I understand all the edge cases it might be
-trying to handle, yet, to make it simpler, yet.
-
-Original doc string:
-
-Return appropriate indentation for current line as Lisp code.
 In usual case returns an integer: the column to indent to.
 If the value is nil, that means don't change the indentation
 because the line starts inside a string.
 
-The value can also be a list of the form (COLUMN CONTAINING-SEXP-START).
-This means that following lines at the same level of indentation
-should not necessarily be indented the same as this line.
-Then COLUMN is the column to indent to, and CONTAINING-SEXP-START
-is the buffer position of the start of the containing expression."
+Note: This is a somewhat simplified version of
+`calculate-lisp-indent'. This is still more verbose and
+imperative than I'd like. But I'm not confident enough I
+understand all the edge cases it might be trying to handle, yet,
+to make it simpler."
   (save-excursion
     (beginning-of-line)
     (let ((indent-point    (point))
@@ -230,7 +218,7 @@ value can be:
 
 * a function to call that returns the indentation.
 
-This function always returns either the indentation to use (never returns nil)."
+This function always returns the indentation to use (never returns nil)."
   (goto-char (racket--ppss-containing-sexp state))
   (let ((body-indent (+ (current-column) lisp-body-indent)))
     (forward-char 1)
@@ -305,18 +293,18 @@ To handle nested items, we search `backward-up-list' up to
     (if (ignore-errors
           ;; `backward-sexp' until we reach the start of a sexp that is the
           ;; first of its line (the start of the enclosing sexp).
-          (while (string-match "[^[:blank:]]"
+          (while (string-match (rx (not blank))
                                (buffer-substring (line-beginning-position)
                                                  (point)))
             (setq last-sexp-start (prog1 (point)
                                     (forward-sexp -1))))
           t)
-        ;; Here we have found an arg before the arg we're indenting which is at
-        ;; the start of a line. Every mode simply aligns on this case.
+        ;; Here we've found an arg before the arg we're indenting
+        ;; which is at the start of a line.
         (current-column)
-      ;; Here we have reached the start of the enclosing sexp (point
-      ;; is now at the function name), so the behaviour depends on
-      ;; whether there's also an argument on this line.
+      ;; Here we've reached the start of the enclosing sexp (point is
+      ;; now at the function name), so the behavior depends on whether
+      ;; there's also an argument on this line.
       (when (and last-sexp-start
                  (< last-sexp-start (line-end-position)))
         ;; There's an arg after the function name, so align with it.
@@ -324,6 +312,9 @@ To handle nested items, we search `backward-up-list' up to
       (current-column))))
 
 (defun racket--indent-special-form (method indent-point state)
+  "METHOD must be a nonnegative integer -- the number of
+  \"special\" args that get extra indent when not on the first
+  line. Any additinonl args get normal indent."
   ;; Credit: Substantially borrowed from clojure-mode
   (let ((containing-column (save-excursion
                              (goto-char (racket--ppss-containing-sexp state))
@@ -351,19 +342,26 @@ To handle nested items, we search `backward-up-list' up to
   (let ((n (if (looking-at looking-at-regexp) true false)))
     (racket--indent-special-form n indent-point state)))
 
+(defconst racket--identifier-regexp
+  (rx (or (syntax symbol) (syntax word) (syntax punctuation)))
+  "A regexp matching valid Racket identifiers.")
+
 (defun racket--indent-maybe-named-let (indent-point state)
-  ;; check for named let
+  "Indent a let form, handling named let (let <id> <bindings> <expr> ...)"
   (racket--conditional-indent indent-point state
-                              "[-a-zA-Z0-9+*/?!@$%^&_:~]" 2 1))
+                              racket--identifier-regexp
+                              2 1))
 
 (defun racket--indent-for (indent-point state)
   "Indent function for all for/ and for*/ forms EXCEPT
-for/fold and for*/fold."
-  ;; check for either of:
-  ;; - maybe-type-ann e.g. (for/list : T ([x xs]) x)
-  ;; - for/vector optional length, (for/vector #:length ([x xs]) x)
+for/fold and for*/fold.
+
+Checks for either of:
+  - maybe-type-ann e.g. (for/list : T ([x xs]) x)
+  - for/vector optional length, (for/vector #:length ([x xs]) x)"
   (racket--conditional-indent indent-point state
-                              "[:#]" 3 1))
+                              (rx (or ?\: ?\#))
+                              3 1))
 
 (defun racket--indent-for/fold (indent-point state)
   "Indent function for for/fold and for*/fold."
@@ -399,8 +397,7 @@ for/fold and for*/fold."
                       (cl-incf n)
                       (forward-sexp 1)
                       (parse-partial-sexp (point) indent-point 1 t))))
-        (list (if (= 1 n) clause-indent body-indent)
-              containing-sexp-start)))))
+        (if (= 1 n) clause-indent body-indent)))))
 
 (defun racket--get-indent-function-method (head)
   "Get property of racket- or scheme-indent-function.
