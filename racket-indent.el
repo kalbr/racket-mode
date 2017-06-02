@@ -127,16 +127,16 @@ need."
          (t                     (current-column)))))))
 
 (defun racket--plain-beginning-of-defun ()
-  "Plain `beginning-of-function'.
-Because `racket--beginning-of-defun-function' is aware of module
+  "Like default/plain `beginning-of-function'.
+Our `racket--beginning-of-defun-function' is aware of module
 forms and tailored to using C-M-a to navigate interactively. But
 it is too slow to be used here -- especially in \"degenerate\"
 cases like a 3000 line file consisting of one big `module` or
 `library` sexpr."
-  (let ((beginning-of-defun-function nil)
-        (open-paren-in-column-0-is-defun-start t)
-        (defun-prompt-regexp nil))
-    (beginning-of-defun)))
+  (when (re-search-backward (rx bol (syntax open-parenthesis))
+                            nil
+                            'move)
+    (goto-char (1- (match-end 0)))))
 
 (defun racket-indent-function (indent-point state)
   "Called by `racket--calculate-indent' to get indent column.
@@ -181,7 +181,7 @@ Returns nil for #% identifiers like #%app."
                           (not (any ?\%))))))
 
 (defun racket--data-sequence-p ()
-  "Looking at \"data\" sequences where we align all with head?
+  "Looking at \"data\" sequences where we align under head item?
 
 These sequences include '() `() #() -- and {} when
 `racket-indent-curly-as-sequence' is t -- but never #'() #`() ,()
