@@ -1,4 +1,4 @@
-;;; racket-indent.el
+;;; racket-indent.el  -*- lexical: t; -*-
 
 ;; Copyright (c) 2013-2017 by Greg Hendershott.
 ;; Portions Copyright (C) 1985-1986, 1999-2013 Free Software Foundation, Inc.
@@ -88,7 +88,7 @@ settings, particularly in the form of file or dir local
 variables. Otherwise prefer `racket-indent-function`."
   (interactive)
   (pcase (racket--calculate-indent)
-    (`nil  nil)
+    (`()  nil)
     ;; When point is within the leading whitespace, move it past the
     ;; new indentation whitespace. Otherwise preserve its position
     ;; relative to the original text.
@@ -108,49 +108,41 @@ In usual case returns an integer: the column to indent to.
 If the value is nil, that means don't change the indentation
 because the line starts inside a string.
 
-Note: This is a somewhat simplified version of
-`calculate-lisp-indent'. This is still more verbose and
-imperative than I'd like. But I'm not confident enough I
-understand all the edge cases it might be trying to handle, yet,
-to make it simpler."
+This is `calculate-lisp-indent' distilled to what we actually
+need."
   (save-excursion
     (beginning-of-line)
-    (let ((indent-point    (point))
-          (state           nil)
-          (desired-indent  nil)
-          (found-inner     nil)
-          (last-sexp       nil)
-          (containing-sexp nil))
-      (let ((beginning-of-defun-function nil)) ;plain b-o-d
-        (beginning-of-defun))
-      ;; Find outermost containing sexp
+    (let ((indent-point (point))
+          (state        nil))
+      (racket--plain-beginning-of-defun)
       (while (< (point) indent-point)
         (setq state (parse-partial-sexp (point) indent-point 0)))
-      ;; Find innermost containing sexp
-      (while (and (not found-inner)
-                  state
-                  (< 0 (racket--ppss-paren-depth state)))
-        (setq found-inner t)
-        (setq last-sexp (racket--ppss-last-sexp state))
-        (setq containing-sexp (racket--ppss-containing-sexp state))
-        ;; Position following last unclosed open.
-        (goto-char (1+ containing-sexp))
-        ;; Is there a complete sexp since then?
-        (when (and last-sexp (< (point) last-sexp))
-          ;; Yes, but is there a containing sexp after that?
-          (let ((peek (parse-partial-sexp last-sexp indent-point 0)))
-            (when (racket--ppss-containing-sexp peek)
-              (setq found-inner nil)
-              (setq state peek)))))
+      (let ((strp (racket--ppss-string-p state))
+            (last (racket--ppss-last-sexp state))
+            (cont (racket--ppss-containing-sexp state)))
+        (cond
+         (strp                  nil)
+         ((and state last cont) (racket-indent-function indent-point state))
+         (cont                  (goto-char (1+ cont)) (current-column))
+         (t                     (current-column)))))))
 
-      (cond ((racket--ppss-string-p state) nil)
-            ((not found-inner)             (current-column))
-            (last-sexp                     (racket-indent-function indent-point state))
-            (t                             (goto-char (1+ containing-sexp))
-                                           (current-column))))))
+(defun racket--plain-beginning-of-defun ()
+  "Plain `beginning-of-function'.
+Because `racket--beginning-of-defun-function' is aware of module
+forms and tailored to using C-M-a to navigate interactively. But
+it is too slow to be used here -- especially in \"degenerate\"
+cases like a 3000 line file consisting of one big `module` or
+`library` sexpr."
+  (let ((beginning-of-defun-function nil)
+        (open-paren-in-column-0-is-defun-start t)
+        (defun-prompt-regexp nil))
+    (beginning-of-defun)))
 
 (defun racket-indent-function (indent-point state)
-  "The function `racket--calculate-indent' calls this.
+  "Called by `racket--calculate-indent' to get indent column.
+
+INDENT-POINT is the position at which the line being indented begins.
+STATE is the `parse-partial-sexp' state for that position.
 
 There is special handling for:
   - forms that begin with a #:keyword (as found in contracts)
@@ -158,26 +150,8 @@ There is special handling for:
   - data sequences when `racket-indent-sequence-depth' is > 0
   - {} forms when `racket-indent-curly-as-sequence' is not nil
 
-INDENT-POINT is the position at which the line being indented begins.
-STATE is the `parse-partial-sexp' state for that position.
-
-If the current line is in a call to a Lisp form that has a non-nil
-property `racket-indent-function' it specifies how to indent.  The property
-value can be:
-
-* `defun', meaning indent `defun'-style
-  \(this is also the case if there is no property and the form
-  has a name that begins with \"def\" or \"with-\");
-
-* an integer N, meaning indent the first N arguments specially
-  \(like ordinary function arguments), and then indent any
-  further arguments like a body \(a value of 0 is used if there
-  is no property and the form has a name that begins with
-  \"begin\");
-
-* a function to call that returns the indentation.
-
-This function always returns the indentation to use (never returns nil)."
+See `racket-indent-line' for more information about users setting
+the `racket-indent-function` property."
   (goto-char (racket--ppss-containing-sexp state))
   (let ((body-indent (+ (current-column) lisp-body-indent)))
     (forward-char 1)
@@ -200,8 +174,8 @@ This function always returns the indentation to use (never returns nil)."
                (racket--normal-indent indent-point state)))))))
 
 (defun racket--hash-literal-or-keyword-p ()
-  "Looking at things like #hash(___) or (#:keyword ___) ?
-Latter occurs e.g. in Racket contract forms.
+  "Looking at things like #fl() #hash() or #:keyword ?
+The last occurs in Racket contract forms, e.g. (->* () (#:kw kw)).
 Returns nil for #% identifiers like #%app."
   (looking-at (rx ?\# (or ?\:
                           (not (any ?\%))))))
@@ -223,7 +197,7 @@ To handle nested items, we search `backward-up-list' up to
              (while (and (eq answer 'unknown)
                          (< 0 depth))
                (backward-up-list)
-               (setq depth (1- depth))
+               (cl-decf depth)
                (cond ((or
                        ;; a quoted '( ) or quasiquoted `( ) list --
                        ;; but NOT syntax #'( ) or quasisyntax #`( )
@@ -265,10 +239,10 @@ To handle nested items, we search `backward-up-list' up to
       ;; Here we've reached the start of the enclosing sexp (point is
       ;; now at the function name), so the behavior depends on whether
       ;; there's also an argument on this line.
-      (when (and last-sexp-start
-                 (< last-sexp-start (line-end-position)))
+      (when (and last-sexp
+                 (< last-sexp (line-end-position)))
         ;; There's an arg after the function name, so align with it.
-        (goto-char last-sexp-start))
+        (goto-char last-sexp))
       (current-column))))
 
 (defun racket--indent-special-form (method indent-point state)
@@ -369,7 +343,8 @@ indents for _other_ with- forms, those _will_ be used. We only
 ignore a short list defined by scheme-mode itself."
   (let ((sym (intern-soft head)))
     (or (get sym 'racket-indent-function)
-        (and (not (memq sym '(with-mode
+        (and (not (memq sym '(call-with-values
+                              with-mode
                               with-input-from-file
                               with-input-from-port
                               with-output-to-file
